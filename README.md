@@ -2,9 +2,9 @@
 
 # 🔌 subscription-powers
 
-**Turn your ChatGPT (Codex) and Claude (Claude Code) subscriptions into MCP tools any agent can call.**
+**把你的 ChatGPT（Codex）与 Claude（Claude Code）订阅变成任何 Agent 都能调用的 MCP 工具。**
 
-Image generation · Live web search · Page fetch · Subscription-billed task runner — with zero API keys.
+生图 · 联网搜索 · 网页抓取 · 订阅额度跑任务 —— 全程零 API Key。
 
 [![MIT License](https://img.shields.io/badge/License-MIT-22c55e?style=for-the-badge)](./LICENSE)
 [![Node ≥ 20](https://img.shields.io/badge/Node.js-%E2%89%A5%2020-339933?style=for-the-badge&logo=node.js&logoColor=white)](https://nodejs.org)
@@ -12,112 +12,114 @@ Image generation · Live web search · Page fetch · Subscription-billed task ru
 [![Codex CLI](https://img.shields.io/badge/OpenAI-Codex%20CLI-000000?style=for-the-badge&logo=openai&logoColor=white)](https://github.com/openai/codex)
 [![Claude Code](https://img.shields.io/badge/Anthropic-Claude%20Code-d97757?style=for-the-badge&logo=anthropic&logoColor=white)](https://docs.anthropic.com/en/docs/claude-code)
 
-[Why](#-why) · [Tools](#-tools) · [How it works](#%EF%B8%8F-how-it-works) · [Quick start](#-quick-start) · [Connect your agent](#-connect-your-agent) · [Cost & latency](#-cost--latency) · [Troubleshooting](#-troubleshooting) · [中文](#-中文简介)
+**🌐 语言：** 简体中文 · [English](./README.en.md)
+
+[为什么](#-为什么) · [工具](#-工具) · [工作原理](#%EF%B8%8F-工作原理) · [快速开始](#-快速开始) · [接入你的-agent](#-接入你的-agent) · [成本与时延](#-成本与时延) · [排错](#-排错)
 
 </div>
 
 ---
 
-## 💡 Why
+## 💡 为什么
 
-Subscriptions bundle capabilities that plain API relays and self-hosted models don't have:
+订阅里捆着一些普通 API 中转和本地模型给不了的能力：
 
-| Capability | 🧠 OpenAI-compatible relay / local model | 🟢 ChatGPT subscription (Codex) | 🟠 Claude subscription (Claude Code) |
+| 能力 | 🧠 OpenAI 兼容中转 / 本地模型 | 🟢 ChatGPT 订阅（Codex） | 🟠 Claude 订阅（Claude Code） |
 |---|:---:|:---:|:---:|
-| 🎨 Image generation & editing (`gpt-image-2`) | ✗ | ✓ `image_gen` | ✗ |
-| 🌐 Live web search | ✗ | ✓ native `web_search` | ✓ `WebSearch` |
-| 📄 Server-side page fetch with cache | ✗ | – | ✓ `WebFetch` |
-| 💳 Billing | per token | flat monthly | flat monthly |
+| 🎨 生图 / 改图（`gpt-image-2`） | ✗ | ✓ 内置 `image_gen` | ✗ |
+| 🌐 实时联网搜索 | ✗ | ✓ 原生 `web_search` | ✓ `WebSearch` |
+| 📄 服务端网页抓取（带缓存） | ✗ | – | ✓ `WebFetch` |
+| 💳 计费方式 | 按 token | 月费包干 | 月费包干 |
 
-**subscription-powers** exposes exactly those subscription-only powers as standard MCP tools, so *every* agent you run — OpenCode, oh-my-pi, a Codex pointed at a company relay, even Claude Code itself — can borrow them.
+**subscription-powers** 把这几样"只有订阅才有"的能力原样暴露成标准 MCP 工具，于是你手头的每一个 Agent —— OpenCode、oh-my-pi、接了公司中转的 Codex、甚至 Claude Code 自己 —— 都能借用。
 
 > [!IMPORTANT]
-> This project never reads, copies or forwards your credentials. It only spawns the official `codex` / `claude` CLIs as child processes, exactly the way you would in a terminal. Nothing here talks to OpenAI or Anthropic backends directly.
+> 本项目**不读、不复制、不转发任何凭据**。它只做一件事：像你在终端里那样，起官方的 `codex` / `claude` 子进程。这里没有任何代码直接连接 OpenAI 或 Anthropic 的后端。
 
 ---
 
-## 🧰 Tools
+## 🧰 工具
 
-| Tool | Backend | What it does |
+| 工具 | 底层 | 作用 |
 |---|---|---|
-| 🎨 `codex_generate_image` | `codex exec` → built-in `image_gen` | Generate a PNG (1024², 1536×1024, 1024×1536). Style hints, transparent background, reference image. |
-| ✂️ `codex_edit_image` | `codex exec` → `image_gen` edit | Edit an existing image with a natural-language instruction; optional mask. |
-| 🔎 `codex_web_search` | `codex --search exec` | OpenAI native `web_search` inside Codex. Answer + source URLs + token usage. |
-| 🌐 `claude_web_search` | `claude -p` + `WebSearch`/`WebFetch` | Anthropic-side search. Answer + sources + list-price cost + turn count. |
-| 📄 `claude_web_fetch` | `claude -p` + `WebFetch` | Fetch one URL (server-side, 15-min cache) and answer a question about it. |
-| 🤖 `codex_run` | `codex exec` | Run an arbitrary task on the subscription GPT model (read-only sandbox by default). |
-| 🧑‍💻 `claude_run` | `claude -p` | Run an arbitrary task on the subscription Claude model (read-only tools by default). |
+| 🎨 `codex_generate_image` | `codex exec` → 内置 `image_gen` | 生成 PNG（1024²、1536×1024、1024×1536），支持风格提示、透明底、参考图 |
+| ✂️ `codex_edit_image` | `codex exec` → `image_gen` 编辑 | 用自然语言修改已有图片，可选遮罩 |
+| 🔎 `codex_web_search` | `codex --search exec` | Codex 内的 OpenAI 原生 `web_search`，返回答案 + 来源 URL + token 用量 |
+| 🌐 `claude_web_search` | `claude -p` + `WebSearch`/`WebFetch` | Anthropic 侧搜索，返回答案 + 来源 + 标价成本 + 轮数 |
+| 📄 `claude_web_fetch` | `claude -p` + `WebFetch` | 抓取一个 URL（服务端抓取、15 分钟缓存）并回答关于它的问题 |
+| 🤖 `codex_run` | `codex exec` | 用订阅的 GPT 模型跑任意任务（默认只读沙箱） |
+| 🧑‍💻 `claude_run` | `claude -p` | 用订阅的 Claude 模型跑任意任务（默认只读工具） |
 
-Every result is JSON with `ok`, the payload, `elapsed_ms`, and usage (`tokens` for Codex, `cost_usd_list_price` + `turns` for Claude) so the calling agent can reason about quota.
+每个结果都是 JSON：`ok`、负载、`elapsed_ms`，以及用量（Codex 给 `tokens`，Claude 给 `cost_usd_list_price` 与 `turns`），调用方可以据此掂量额度。
 
 ---
 
-## ⚙️ How it works
+## ⚙️ 工作原理
 
 ```mermaid
 flowchart LR
-    subgraph Agents["Any MCP client"]
+    subgraph Agents["任意 MCP 客户端"]
         A1["🟠 Claude Code"]
         A2["🟩 OpenCode"]
-        A3["⬛ Codex (company relay)"]
+        A3["⬛ Codex（公司中转）"]
         A4["🥧 oh-my-pi"]
     end
-    S["🔌 subscription-powers<br/>MCP server (stdio)"]
-    subgraph Local["Official CLIs · personal login · child processes"]
+    S["🔌 subscription-powers<br/>MCP server（stdio）"]
+    subgraph Local["官方 CLI · 个人登录态 · 子进程"]
         C1["codex exec / codex --search exec"]
         C2["claude -p --allowedTools …"]
     end
-    U1["ChatGPT subscription<br/>image_gen · web_search · GPT"]
-    U2["Claude subscription<br/>WebSearch · WebFetch · Claude"]
+    U1["ChatGPT 订阅<br/>image_gen · web_search · GPT"]
+    U2["Claude 订阅<br/>WebSearch · WebFetch · Claude"]
 
     A1 & A2 & A3 & A4 -->|tools/call| S
-    S -->|serial queue · timeout · progress heartbeat| C1 & C2
+    S -->|串行队列 · 超时 · 进度心跳| C1 & C2
     C1 --> U1
     C2 --> U2
 ```
 
-Design rules that keep it boring and safe:
+几条让它"无聊但安全"的设计规则：
 
-- 🔒 **Credential-free.** Child processes get a scrubbed environment: `CLAUDECODE`, `CLAUDE_CODE_*`, `CLAUDE_CONFIG_DIR`, `ANTHROPIC_*`, `CODEX_HOME`, relay API keys are all removed, so the CLIs always run under your *personal* `~/.codex` and `~/.claude` — even when the caller is a company-configured agent.
-- 🚦 **One job per backend at a time.** A serial queue per CLI; cold starts and quota don't like concurrency.
-- ⏱️ **Timeouts with teeth.** SIGTERM then SIGKILL. Long jobs emit MCP `notifications/progress` every 8 s so clients with `resetTimeoutOnProgress` never hit the default 60 s wall.
-- 🗂️ **Files, not blobs.** Images are saved where you ask; the model replies `SAVED <path>`, the server `stat`s it, and falls back to the newest PNG in `out_dir`.
-- 🛡️ **Path guard.** Absolute paths only; nothing may land inside `~/.codex`, `~/.claude`, `~/.ssh`, `~/.aws`, …
+- 🔒 **零凭据。** 子进程拿到的是清洗过的环境：`CLAUDECODE`、`CLAUDE_CODE_*`、`CLAUDE_CONFIG_DIR`、`ANTHROPIC_*`、`CODEX_HOME`、中转 API Key 全部剥掉，所以 CLI 永远在你**个人**的 `~/.codex` 与 `~/.claude` 下运行 —— 即便调用方是配了公司环境的 Agent。
+- 🚦 **每个后端同时只跑一个。** 每条 CLI 一个串行队列；冷启动和额度都经不起并发。
+- ⏱️ **有牙齿的超时。** 先 SIGTERM 再 SIGKILL。长任务每 8 秒发一次 MCP `notifications/progress` 心跳，支持 `resetTimeoutOnProgress` 的客户端不会撞上默认 60 秒的墙。
+- 🗂️ **落文件，不传大块。** 图片保存到你指定的目录；模型回复 `SAVED <path>`，服务端 `stat` 核验，找不到就取 `out_dir` 里最新的 PNG 兜底。
+- 🛡️ **路径守卫。** 只接受绝对路径，且不允许写进 `~/.codex`、`~/.claude`、`~/.ssh`、`~/.aws` 等目录。
 
 ---
 
-## 🚀 Quick start
+## 🚀 快速开始
 
-**Prerequisites**
+**前提**
 
 - Node.js ≥ 20
-- `codex` CLI installed and logged in with your ChatGPT account (`codex login`)
-- `claude` CLI installed and logged in with your Claude subscription
+- 已安装 `codex` CLI 并用 ChatGPT 账号登录（`codex login`）
+- 已安装 `claude` CLI 并用 Claude 订阅登录
 
 ```bash
 git clone https://github.com/we1005/subscription-powers-mcp.git
 cd subscription-powers-mcp/server
 npm install
 
-# list tools + one cheap WebFetch
+# 列出工具 + 一次便宜的 WebFetch
 npm run smoke
-# exercise everything once (generates one image — spends subscription quota)
+# 每个工具都真跑一遍（会生成一张图，消耗订阅额度）
 node tests/smoke.mjs --full
-# pick tools
+# 只挑几个
 node tests/smoke.mjs --only=codex_web_search,claude_web_search
 ```
 
 ---
 
-## 🔗 Connect your agent
+## 🔗 接入你的 Agent
 
 <details open>
 <summary><b>🟠 Claude Code</b></summary>
 
 ```bash
-claude mcp add --scope user subscription-powers -- node /ABS/PATH/subscription-powers-mcp/server/index.mjs
+claude mcp add --scope user subscription-powers -- node /绝对路径/subscription-powers-mcp/server/index.mjs
 ```
-Works the same for a second config dir (`CLAUDE_CONFIG_DIR=… claude mcp add …`).
+第二套配置目录同理：`CLAUDE_CONFIG_DIR=… claude mcp add …`。
 </details>
 
 <details>
@@ -128,7 +130,7 @@ Works the same for a second config dir (`CLAUDE_CONFIG_DIR=… claude mcp add �
   "mcp": {
     "subscription-powers": {
       "type": "local",
-      "command": ["node", "/ABS/PATH/subscription-powers-mcp/server/index.mjs"],
+      "command": ["node", "/绝对路径/subscription-powers-mcp/server/index.mjs"],
       "enabled": true
     }
   }
@@ -137,17 +139,17 @@ Works the same for a second config dir (`CLAUDE_CONFIG_DIR=… claude mcp add �
 </details>
 
 <details>
-<summary><b>⬛ Codex CLI</b> — <code>~/.codex/config.toml</code> (or any <code>CODEX_HOME</code>)</summary>
+<summary><b>⬛ Codex CLI</b> — <code>~/.codex/config.toml</code>（或任意 <code>CODEX_HOME</code>）</summary>
 
 ```toml
 [mcp_servers.subscription-powers]
 command = "node"
-args = ["/ABS/PATH/subscription-powers-mcp/server/index.mjs"]
-default_tools_approval_mode = "approve"   # tools are read-only except image files you asked for
+args = ["/绝对路径/subscription-powers-mcp/server/index.mjs"]
+default_tools_approval_mode = "approve"   # 除你点名要的图片文件外，工具均为只读
 startup_timeout_sec = 30
 tool_timeout_sec = 600
 ```
-Yes — a Codex pointed at a company relay can borrow your *personal* Codex's image generation this way.
+没错 —— 接了公司中转的 Codex，可以这样借用你**个人** Codex 的生图能力。
 </details>
 
 <details>
@@ -158,7 +160,7 @@ Yes — a Codex pointed at a company relay can borrow your *personal* Codex's im
   "mcpServers": {
     "subscription-powers": {
       "command": "node",
-      "args": ["/ABS/PATH/subscription-powers-mcp/server/index.mjs"]
+      "args": ["/绝对路径/subscription-powers-mcp/server/index.mjs"]
     }
   }
 }
@@ -167,58 +169,48 @@ Yes — a Codex pointed at a company relay can borrow your *personal* Codex's im
 
 ---
 
-## 💸 Cost & latency
+## 💸 成本与时延
 
-Measured on a ChatGPT Plus + Claude Team setup, macOS, Sept 2026:
+2026 年 9 月在 ChatGPT Plus + Claude Team、macOS 上的实测：
 
-| Tool | Typical time | Typical cost |
+| 工具 | 典型耗时 | 典型成本 |
 |---|---|---|
-| 🎨 `codex_generate_image` | 45–90 s | ~25–90 K tokens (mostly cached) · ≈1 % of the 5-hour Plus window → roughly **300–500 images/week** |
-| 🔎 `codex_web_search` | 25–60 s | ~65 K tokens (≈50 K cached) |
-| 🌐 `claude_web_search` | 30–40 s | 4–5 turns · ~$0.4 list price |
-| 📄 `claude_web_fetch` | ~12 s | ~$0.3 list price |
+| 🎨 `codex_generate_image` | 45–90 s | 约 2.5–9 万 token（大部分命中缓存）· 约占 Plus 5 小时窗口 1 % → 粗估 **每周 300–500 张** |
+| 🔎 `codex_web_search` | 25–60 s | 约 6.5 万 token（约 5 万缓存） |
+| 🌐 `claude_web_search` | 30–40 s | 4–5 轮 · 标价约 $0.4 |
+| 📄 `claude_web_fetch` | 约 12 s | 标价约 $0.3 |
 
-Cold-starting a CLI is 5–10 s of every call; batch related questions into one call when you can.
+每次调用都有 5–10 秒的 CLI 冷启动；相关问题尽量合并到一次调用里。
 
 ---
 
-## 🩺 Troubleshooting
+## 🩺 排错
 
-| Symptom | Meaning | Fix |
+| 现象 | 含义 | 处理 |
 |---|---|---|
-| `codex_not_authed` / `claude_not_authed` | CLI isn't logged in | run `codex login` / `claude` once in a terminal |
-| `codex_timeout` | complex image or slow network | raise `timeout_ms` (max 600 s) |
-| `no_image_saved` | model didn't follow the `SAVED` protocol or refused | read `last_message` in the result; rephrase |
-| `MCP error -32001: Request timed out` on the **client** | client's 60 s default | enable `resetTimeoutOnProgress` / raise the client tool timeout; server already sends heartbeats |
-| `shell_commands_used > 0` in search results | Codex used shell instead of `web_search` (local skills can lure it) | harmless, just slower; the prompt already forbids it |
+| `codex_not_authed` / `claude_not_authed` | CLI 未登录 | 在终端跑一次 `codex login` / `claude` |
+| `codex_timeout` | 图太复杂或网络慢 | 调大 `timeout_ms`（上限 600 s） |
+| `no_image_saved` | 模型没按 `SAVED` 协定回复，或被内容策略拒绝 | 看结果里的 `last_message`，换个说法 |
+| **客户端**报 `MCP error -32001: Request timed out` | 客户端默认 60 秒 | 开 `resetTimeoutOnProgress` 或调大客户端工具超时；服务端已在发心跳 |
+| 搜索结果里 `shell_commands_used > 0` | Codex 没用 `web_search` 而是跑了命令（会被本机 skills 诱导） | 无害，只是更慢；提示词里已禁止 |
 
 ---
 
-## 🗺️ Roadmap
+## 🗺️ 路线图
 
-- [ ] Persistent Codex session (`codex mcp-server` / Agent SDK) to skip cold starts
-- [ ] Return small thumbnails inline as MCP image content
-- [ ] `codex_generate_image_set` for style-consistent batches
-- [ ] Per-tool quota accounting persisted across calls
+- [ ] 长驻 Codex 会话（`codex mcp-server` / Agent SDK），省掉冷启动
+- [ ] 以 MCP image content 内联返回小缩略图
+- [ ] `codex_generate_image_set`：风格一致的成组出图
+- [ ] 跨调用持久化的按工具额度统计
 
-## 🙏 Credits
+## 🙏 致谢
 
-- Prompt protocol and error taxonomy inspired by [colin-automates/Codex-ImageGen--Claude-Code](https://github.com/colin-automates/Codex-ImageGen--Claude-Code) (MIT).
-- Built on the [Model Context Protocol TypeScript SDK](https://github.com/modelcontextprotocol/typescript-sdk).
-
-## ⚠️ Disclaimer
-
-Use within the terms of your OpenAI and Anthropic subscriptions. This tool automates the official CLIs; it does not bypass rate limits, and heavy image generation consumes your plan's quota quickly.
-
----
-
-## 🇨🇳 中文简介
-
-把 **ChatGPT 订阅（Codex）** 与 **Claude 订阅（Claude Code）** 里只有订阅才有的能力 —— 生图 / 改图（gpt-image-2）、原生联网搜索、服务端网页抓取 —— 封装成标准 MCP 工具，让 OpenCode、oh-my-pi、接了公司中转的 Codex、乃至 Claude Code 自己都能调用。
-
-- **不碰凭据**：只起官方 `codex` / `claude` 子进程，并剥掉调用方注入的公司/会话环境变量，永远走你个人的 `~/.codex` 与 `~/.claude`。
-- **7 个工具**：`codex_generate_image` · `codex_edit_image` · `codex_web_search` · `claude_web_search` · `claude_web_fetch` · `codex_run` · `claude_run`，结果自带用量。
-- **实测**：生图约 1 分钟、占 Plus 5 小时窗口约 1 %；搜索 25–60 s。
+- 提示词协定与错误分类借鉴自 [colin-automates/Codex-ImageGen--Claude-Code](https://github.com/colin-automates/Codex-ImageGen--Claude-Code)（MIT）。
+- 基于 [Model Context Protocol TypeScript SDK](https://github.com/modelcontextprotocol/typescript-sdk)。
 - 设计取舍与调研过程见 [`docs/analysis-and-plan.zh.md`](./docs/analysis-and-plan.zh.md)。
 
-<div align="center"><sub>Made with the two subscriptions I was already paying for.</sub></div>
+## ⚠️ 声明
+
+请在 OpenAI 与 Anthropic 订阅条款允许的范围内使用。本工具只是把官方 CLI 自动化了，不绕过任何限额；重度生图会很快消耗你套餐的额度。
+
+<div align="center"><sub>用我本来就在付费的两个订阅做的。</sub></div>
