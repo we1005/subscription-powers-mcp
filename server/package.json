@@ -1,0 +1,38 @@
+{
+  "name": "subscription-powers-mcp",
+  "version": "0.1.0",
+  "description": "MCP server that exposes subscription-only powers of Codex (ChatGPT) and Claude Code — image generation, live web search, page fetch — to any agent, by spawning the official CLIs. No API keys.",
+  "type": "module",
+  "private": true,
+  "bin": {
+    "subscription-powers": "./index.mjs"
+  },
+  "scripts": {
+    "start": "node index.mjs",
+    "smoke": "node tests/smoke.mjs"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.30.0",
+    "zod": "^3.23.8"
+  },
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/we1005/subscription-powers-mcp.git"
+  },
+  "keywords": [
+    "mcp",
+    "model-context-protocol",
+    "codex",
+    "claude-code",
+    "opencode",
+    "image-generation",
+    "gpt-image",
+    "web-search",
+    "agent-tools"
+  ],
+  "author": "we1005"
+}

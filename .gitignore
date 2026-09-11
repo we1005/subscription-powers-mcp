@@ -1,0 +1,7 @@
+node_modules/
+.DS_Store
+*.log
+# third-party reference implementation, cloned locally for reading only (see README → Credits)
+reference/
+# smoke-test artifacts
+server/tests/out/
