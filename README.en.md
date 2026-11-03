@@ -318,6 +318,25 @@ Yes — a Codex pointed at a company relay can borrow your **personal** Codex's 
 
 ---
 
+## 🧲 Making the model remember to use it
+
+The usual MCP failure is the model simply not thinking of the tool. Three layers, weakest to strongest:
+
+1. **Built-in server instructions (no setup)**: the server's `instructions` are surfaced by Codex as the model-visible description of this MCP and put into Claude Code's system prompt: "for current information call `web_search` first, never claim you can't browse".
+2. **Directive tool descriptions**: `web_search`'s description opens with "call this whenever an answer depends on online information instead of answering from memory".
+3. **Repeat it in your global instruction file (most reliable, recommended)**: `AGENTS.md` is injected into every turn, which beats a Skill (a Skill only loads once its description matches).
+
+```markdown
+# ~/.codex/AGENTS.md (for Claude Code: ~/.claude/CLAUDE.md)
+When you need current or verifiable online information (versions, releases, news, docs, prices, "latest"),
+call subscription-powers' `web_search` before answering; don't answer from memory and don't say you can't browse.
+```
+
+> [!NOTE]
+> If the host's own web search works, having both is fine; when it doesn't (e.g. behind a third-party relay), the instructions above tell the model to switch to `web_search`. How well this works depends on the model and host; no quantitative comparison has been done.
+
+---
+
 ## 💸 Cost & latency
 
 Measured locally (ChatGPT Plus / Pro, macOS); varies with models and the backend:

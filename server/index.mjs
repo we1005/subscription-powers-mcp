@@ -18,7 +18,15 @@ import * as chatgptWeb from './lib/chatgpt-web.mjs';
 import * as search from './lib/search.mjs';
 import { dotActive, codexApiActive, chatgptWebActive, CONFIG_FILE, SEARCH_BACKENDS } from './lib/store.mjs';
 
-const server = new McpServer({ name: 'subscription-powers', version: '0.1.0' });
+// 写给模型看的使用说明：Codex 会把它作为 MCP 命名空间说明、Claude Code 会放进系统提示。
+// 作用是让模型"一开始就知道"该用哪个工具，而不是等到想起来。保持短、指令式；不提具体后端（开关会变）。
+const INSTRUCTIONS = [
+  'subscription-powers gives you live web search and image generation backed by the user\'s subscriptions.',
+  '- For ANY question that needs current, recent or verifiable online information (versions, releases, news, docs, prices, "latest", anything after your training data), call `web_search` BEFORE answering from memory. Do not say you cannot browse. Use mode "deep" for questions that need a researched answer, "quick" for a list of sources.',
+  '- If a built-in web search tool exists and works, either is fine; if it is missing or fails, use `web_search`.',
+  '- For a raster image (photo, illustration, texture, mockup), call `codex_generate_image`; to modify an existing image, call `codex_edit_image`.',
+].join('\n');
+const server = new McpServer({ name: 'subscription-powers', version: '0.1.0' }, { instructions: INSTRUCTIONS });
 const text = (obj) => ({ content: [{ type: 'text', text: JSON.stringify(obj, null, 2) }], isError: obj?.ok === false });
 // 长任务（生图 30–90 s）会撞上客户端默认 60 s 的请求超时：拿到 progressToken 时每 8 s 发一次 notifications/progress 心跳，
 // 支持 resetTimeoutOnProgress 的客户端（Claude Code / MCP SDK client）会据此续期。
@@ -179,7 +187,7 @@ const chatgptWebTool = server.registerTool('chatgpt_web_search', {
 // 统一搜索入口：按 Dot → Codex 直连 API → Codex CLI 的顺序尝试（可在配置里改顺序），失败或未开启就换下一个。
 server.registerTool('web_search', {
   title: 'Web search (unified: tries every enabled backend in order)',
-  description: 'Use this for live web search. Tries the switched-on backends in order (default: ChatGPT Dot → Codex direct API → fixed ChatGPT web session → Codex CLI), skipping any that are off or auto-disabled and falling through on failure; the reply says which backend answered (`backend`) and what was tried (`attempts`, `skipped`). mode "quick" (default): {title, url, summary} items. mode "deep": a researched answer plus sources. Same result shape whichever backend answers.',
+  description: 'Live web search — call this whenever an answer depends on current or online information instead of answering from memory (works even when the host has no built-in web search). Tries the switched-on backends in order (default: ChatGPT Dot → Codex direct API → fixed ChatGPT web session → Codex CLI), skipping any that are off or auto-disabled and falling through on failure; the reply says which backend answered (`backend`) and what was tried (`attempts`, `skipped`). mode "quick" (default): {title, url, summary} items. mode "deep": a researched answer plus sources. Same result shape whichever backend answers.',
   inputSchema: {
     query: z.string().min(2).describe('The search query or research question, in any language.'),
     mode: z.enum(['quick', 'deep']).optional().describe('quick (default): result list. deep: researched answer with sources.'),
