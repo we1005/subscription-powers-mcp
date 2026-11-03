@@ -1,6 +1,7 @@
 import path from 'node:path';
 import os from 'node:os';
 import { promises as fs } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import { run, classify } from './run.mjs';
 import { cleanEnv } from './env.mjs';
 import { serial } from './queue.mjs';
@@ -8,6 +9,12 @@ import { assertSafeAbs, ensureDir, exists, newestImage, slug } from './paths.mjs
 
 const SIZES = new Set(['1024x1024', '1536x1024', '1024x1536']);
 const URL_RE = /https?:\/\/[^\s)\]>"'`]+/g;
+// 搜索档位：quick 只搜一次、出结构化列表；deep 多次搜索并写综合回答
+const SEARCH_MODES = {
+  quick: { model: 'gpt-6-luna', effort: 'medium' },
+  deep: { model: 'gpt-6.1-sol', effort: 'medium' },
+};
+const QUICK_SCHEMA = fileURLToPath(new URL('./quick-search.schema.json', import.meta.url));
 
 /** 解析 `codex exec --json` 的事件流 */
 function parseEvents(stdout) {
@@ -25,12 +32,14 @@ function parseEvents(stdout) {
   return { messages, searches, errors, commands, usage, final: messages.at(-1) ?? '' };
 }
 
-async function codexExec({ prompt, cwd, sandbox = 'read-only', search = false, attach = [], timeoutMs, model }) {
+async function codexExec({ prompt, cwd, sandbox = 'read-only', search = false, attach = [], timeoutMs, model, effort, outputSchema }) {
   const lastMsg = path.join(await fs.mkdtemp(path.join(os.tmpdir(), 'subpow-')), 'last.txt');
   const args = [];
   if (search) args.push('--search');               // 全局参数，必须在 exec 之前
   if (model) args.push('-m', model);
+  if (effort) args.push('-c', `model_reasoning_effort="${effort}"`);
   args.push('exec', '--skip-git-repo-check', '-s', sandbox, '--cd', cwd, '--json', '--output-last-message', lastMsg, '--color', 'never');
+  if (outputSchema) args.push('--output-schema', outputSchema);
   for (const img of attach) args.push('-i', img);
   args.push(prompt);
   const o = await run('codex', args, { cwd, env: cleanEnv(), timeoutMs });
@@ -94,20 +103,34 @@ export async function editImage(a) {
 
 export async function webSearch(a) {
   return serial('codex', async () => {
+    const mode = a.mode ?? 'quick';
+    const { model, effort } = SEARCH_MODES[mode];
     const cwd = await fs.mkdtemp(path.join(os.tmpdir(), 'subpow-search-'));
-    const n = a.max_results ?? 5;
-    const prompt = [
+    const n = a.max_results ?? (mode === 'quick' ? 10 : 5);   // quick 默认尽量多给；deep 默认 5
+    const rules = 'Use ONLY the built-in web_search tool (do not run shell commands, do not read skills, do not use gh).';
+    const prompt = (mode === 'quick' ? [
+      `Search query: ${a.query.trim()}`,
+      a.recency ? `Prefer results from the last ${a.recency}.` : '',
+      `${rules} Run exactly ONE web search, then stop.`,
+      `Do not write an answer or analysis. Return as many distinct, relevant results as the search turned up, up to ${n} (aim for ${n}; prefer different sites over several pages from one site), each with the page title, its full URL, and a one-sentence summary (in the language of the query) of what that page says.`,
+    ] : [
       `Research question: ${a.query.trim()}`,
       a.recency ? `Prefer sources from the last ${a.recency}.` : '',
-      `Use ONLY the built-in web_search tool to look this up (do not run shell commands, do not read skills, do not use gh). Do at most ${Math.max(2, Math.ceil(n / 2))} searches.`,
+      `${rules} Do at most ${Math.max(2, Math.ceil(n / 2))} searches.`,
       `Answer concisely in the language of the question. Then list up to ${n} sources as markdown bullet links with full URLs under a heading "Sources".`,
-    ].filter(Boolean).join('\n');
-    const o = await codexExec({ prompt, cwd, sandbox: 'read-only', search: true, timeoutMs: a.timeout_ms ?? 180_000 });
+    ]).filter(Boolean).join('\n');
+    const o = await codexExec({ prompt, cwd, sandbox: 'read-only', search: true, model, effort, outputSchema: mode === 'quick' ? QUICK_SCHEMA : undefined, timeoutMs: a.timeout_ms ?? 180_000 });
     fs.rm(cwd, { recursive: true, force: true }).catch(() => {});
     const err = classify(o, 'codex');
-    if (err && !o.last) return { ok: false, ...err, errors: o.ev.errors, stderr_tail: o.stderrTail.slice(-1500) };
+    if (err && !o.last) return { ok: false, ...err, mode, model, effort, errors: o.ev.errors, stderr_tail: o.stderrTail.slice(-1500), elapsed_ms: o.elapsedMs };
+    const meta = { mode, model, effort, searches_made: o.ev.searches, shell_commands_used: o.ev.commands.length, elapsed_ms: o.elapsedMs, usage: usageOut(o.ev.usage), warnings: o.ev.errors.length ? o.ev.errors : undefined };
+    if (mode === 'quick') {
+      let results;
+      try { results = JSON.parse(o.last).results; } catch { return { ok: false, code: 'bad_output', message: 'quick search did not return the expected JSON list', raw: o.last.slice(0, 1500), ...meta }; }
+      return { ok: true, results: results.slice(0, n), ...meta };
+    }
     const sources = [...new Set((o.last.match(URL_RE) ?? []).map((u) => u.replace(/[.,;:]+$/, '')))];
-    return { ok: true, answer: o.last, sources, searches_made: o.ev.searches, shell_commands_used: o.ev.commands.length, elapsed_ms: o.elapsedMs, usage: usageOut(o.ev.usage), warnings: o.ev.errors.length ? o.ev.errors : undefined };
+    return { ok: true, answer: o.last, sources, ...meta };
   });
 }
 

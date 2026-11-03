@@ -13,6 +13,7 @@ const tools = (await client.listTools()).tools;
 console.log('tools:', tools.map((t) => t.name).join(', '));
 const call = async (name, args) => {
   if (only.length && !only.includes(name)) return;
+  if (!tools.some((t) => t.name === name)) return console.log(`\n=== ${name} skipped (not registered)`);
   const t0 = Date.now();
   const r = await client.callTool({ name, arguments: args }, undefined, { timeout: 600_000, resetTimeoutOnProgress: true, onprogress: (p) => process.stdout.write(`  …${p.message ?? p.progress}\r`) });
   const body = JSON.parse(r.content[0].text);
@@ -22,6 +23,7 @@ const call = async (name, args) => {
 await call('claude_web_fetch', { url: 'https://github.com/ggml-org/llama.cpp/releases', prompt: 'What is the newest release tag on this page? One line.' });
 if (full || only.length) {
   await call('codex_web_search', { query: 'llama.cpp 最近一周最新的 release tag 是什么？', max_results: 3 });
+  await call('codex_web_search', { query: 'llama.cpp 最近一周最新的 release tag 是什么？', max_results: 3, mode: 'deep' });
   await call('claude_web_search', { query: 'What is the latest stable Node.js LTS version right now?', max_results: 3 });
   await call('codex_generate_image', { prompt: 'a minimalist flat-vector blue paper plane icon on white background', out_dir: path.join(os.tmpdir(), 'subpow-smoke'), size: '1024x1024', style: 'flat vector' });
 }

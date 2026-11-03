@@ -1,27 +1,48 @@
 #!/usr/bin/env node
 /**
  * subscription-powers —— 把 Codex（ChatGPT 订阅）与 Claude Code（Team 订阅）独有的能力封装成 MCP。
- * 只起官方 CLI 子进程（codex exec / claude -p），不读不改任何凭据；子进程强制使用个人 HOME。
+ * 主体：起官方 CLI 子进程（codex exec / claude -p），不读不改任何凭据；子进程强制使用个人 HOME。
+ * 实验性后端（默认关闭，可热开关）：dot_web_search（Dot 消息接口）、codex_api_search（Codex Responses 接口，
+ * 只读借用 ~/.codex/auth.json 的令牌，从不刷新或写回）。统一入口 web_search 按顺序尝试各后端。
  */
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { z } from 'zod';
 import * as codex from './lib/codex.mjs';
 import * as claude from './lib/claude.mjs';
+import { logCall } from './lib/log.mjs';
+import fs from 'node:fs';
+import * as dot from './lib/dot.mjs';
+import * as codexApi from './lib/codex-api.mjs';
+import * as chatgptWeb from './lib/chatgpt-web.mjs';
+import * as search from './lib/search.mjs';
+import { dotActive, codexApiActive, chatgptWebActive, CONFIG_FILE, SEARCH_BACKENDS } from './lib/store.mjs';
 
 const server = new McpServer({ name: 'subscription-powers', version: '0.1.0' });
 const text = (obj) => ({ content: [{ type: 'text', text: JSON.stringify(obj, null, 2) }], isError: obj?.ok === false });
 // 长任务（生图 30–90 s）会撞上客户端默认 60 s 的请求超时：拿到 progressToken 时每 8 s 发一次 notifications/progress 心跳，
 // 支持 resetTimeoutOnProgress 的客户端（Claude Code / MCP SDK client）会据此续期。
-const guard = (fn) => async (args, extra) => {
+// 每次调用结束写一行 calls.jsonl：排队 / 运行 / 总耗时、模型、usage、错误。
+const guard = (name, fn) => async (args, extra) => {
   const token = extra?._meta?.progressToken; let tick = 0;
   const beat = token !== undefined && extra?.sendNotification
     ? setInterval(() => { tick++; extra.sendNotification({ method: 'notifications/progress', params: { progressToken: token, progress: tick, message: `working… ${tick * 8}s` } }).catch(() => {}); }, 8000)
     : null;
-  try { return text(await fn(args)); }
-  catch (e) { return text({ ok: false, code: 'invalid_input', message: e.message }); }
+  const t0 = Date.now(); let r;
+  try { r = await fn(args); }
+  catch (e) { r = { ok: false, code: 'invalid_input', message: e.message }; }
   finally { if (beat) clearInterval(beat); }
+  logCall({
+    tool: name, input: String(args.query ?? args.prompt ?? args.instruction ?? args.url ?? '').slice(0, 200),
+    backend: r.backend, mode: r.mode, model: r.model ?? args.model ?? null, effort: r.effort,
+    ok: r.ok, code: r.code, queued_ms: r.queued_ms, lock_wait_ms: r.lock_wait_ms, run_ms: r.elapsed_ms, total_ms: Date.now() - t0,
+    usage: r.usage, searches: r.searches_made?.length, attempts: r.attempts?.map((x) => `${x.backend}:${x.ok ? 'ok' : x.code}`), errors: r.ok === false ? [r.message, ...(r.errors ?? []).slice(-3)].filter(Boolean) : undefined,
+  });
+  return text(r);
 };
+// Claude 后端默认关闭（本机没有 Claude 订阅）；设 SUBPOW_ENABLE_CLAUDE=1 重新注册 claude_* 工具
+const ENABLE_CLAUDE = process.env.SUBPOW_ENABLE_CLAUDE === '1';
+const registerClaudeTool = (...a) => { if (ENABLE_CLAUDE) server.registerTool(...a); };
 
 server.registerTool('codex_generate_image', {
   title: 'Generate image (Codex / gpt-image-2, ChatGPT subscription)',
@@ -36,7 +57,7 @@ server.registerTool('codex_generate_image', {
     reference_image: z.string().optional().describe('Absolute path of a reference image to guide the look.'),
     timeout_ms: z.number().int().min(30_000).max(600_000).optional(),
   },
-}, guard(codex.generateImage));
+}, guard('codex_generate_image', codex.generateImage));
 
 server.registerTool('codex_edit_image', {
   title: 'Edit image (Codex / gpt-image-2)',
@@ -48,20 +69,21 @@ server.registerTool('codex_edit_image', {
     mask_path: z.string().optional(),
     timeout_ms: z.number().int().min(30_000).max(600_000).optional(),
   },
-}, guard(codex.editImage));
+}, guard('codex_edit_image', codex.editImage));
 
 server.registerTool('codex_web_search', {
   title: 'Web search via Codex (OpenAI native web_search, ChatGPT subscription)',
-  description: 'Live web research using OpenAI\'s native web_search tool inside Codex (GPT-6 class model). Returns a concise answer plus source URLs. Good for English/tech topics and very recent events. Not available on the company relay — this is the subscription-only path.',
+  description: 'Live web search using OpenAI\'s native web_search tool inside Codex, billed to the ChatGPT subscription. mode "quick" (default; gpt-6-luna, medium effort): ONE search, returns up to max_results (default 10) items of {title, url, summary} — use it to find pages/facts fast. mode "deep" (gpt-6.1-sol, medium effort): several searches plus a synthesized answer with sources — use for questions that need comparing sources. Each call takes tens of seconds to minutes; calls are queued one at a time per session.',
   inputSchema: {
-    query: z.string().min(2).describe('The research question, in any language.'),
-    max_results: z.number().int().min(1).max(10).optional().describe('How many sources to list (default 5).'),
+    query: z.string().min(2).describe('The search query or research question, in any language.'),
+    mode: z.enum(['quick', 'deep']).optional().describe('quick (default): one search, result list only. deep: multi-search research with a written answer.'),
+    max_results: z.number().int().min(1).max(10).optional().describe('Max items to return. Default 10 for quick, 5 for deep.'),
     recency: z.string().optional().describe('e.g. "week", "month", "year" — bias toward fresh sources.'),
     timeout_ms: z.number().int().min(30_000).max(600_000).optional(),
   },
-}, guard(codex.webSearch));
+}, guard('codex_web_search', codex.webSearch));
 
-server.registerTool('claude_web_search', {
+registerClaudeTool('claude_web_search', {
   title: 'Web search via Claude Code (Anthropic WebSearch + WebFetch, Team subscription)',
   description: 'Live web research using Claude Code\'s built-in WebSearch (and WebFetch to read pages). Returns a concise answer plus source URLs and the list-price cost. Independent from the Codex path — use both when cross-checking matters.',
   inputSchema: {
@@ -72,9 +94,9 @@ server.registerTool('claude_web_search', {
     model: z.string().optional().describe('Claude model alias/id, e.g. "opus", "sonnet". Default: personal config default.'),
     timeout_ms: z.number().int().min(30_000).max(600_000).optional(),
   },
-}, guard(claude.webSearch));
+}, guard('claude_web_search', claude.webSearch));
 
-server.registerTool('claude_web_fetch', {
+registerClaudeTool('claude_web_fetch', {
   title: 'Fetch & read a URL via Claude Code WebFetch',
   description: 'Fetch one URL with Claude Code\'s WebFetch (server-side fetch, 15-min cache, handles JS-light pages) and answer a question about it or summarize it. Cheaper than a search.',
   inputSchema: {
@@ -83,7 +105,7 @@ server.registerTool('claude_web_fetch', {
     model: z.string().optional(),
     timeout_ms: z.number().int().min(30_000).max(600_000).optional(),
   },
-}, guard(claude.webFetch));
+}, guard('claude_web_fetch', claude.webFetch));
 
 server.registerTool('codex_run', {
   title: 'Run a task with Codex (GPT-6 class, ChatGPT subscription)',
@@ -96,9 +118,9 @@ server.registerTool('codex_run', {
     model: z.string().optional().describe('e.g. gpt-6-astra, gpt-5.6-sol'),
     timeout_ms: z.number().int().min(30_000).max(1_800_000).optional(),
   },
-}, guard(codex.runTask));
+}, guard('codex_run', codex.runTask));
 
-server.registerTool('claude_run', {
+registerClaudeTool('claude_run', {
   title: 'Run a task with Claude Code (Team subscription)',
   description: 'Fallback: run an arbitrary task with the subscription Claude Code (read-only tools by default; set allow_edits for file changes). Returns the final answer, turns and list-price cost.',
   inputSchema: {
@@ -109,6 +131,69 @@ server.registerTool('claude_run', {
     model: z.string().optional(),
     timeout_ms: z.number().int().min(30_000).max(1_800_000).optional(),
   },
-}, guard(claude.runTask));
+}, guard('claude_run', claude.runTask));
+
+// ChatGPT Pro Dot 搜索：实验性、默认关闭。开关在 ~/.subscription-powers/config.json（`node server/bin/subpow.mjs dot on|off`），
+// 运行中热生效：开关变化时 enable()/disable() 工具，SDK 会自动发 tools/list_changed，客户端无需重启会话。
+const dotTool = server.registerTool('dot_web_search', {
+  title: 'Web search via ChatGPT Pro Dot (experimental, switchable)',
+  description: 'Live web search through the user\'s ChatGPT Pro "Dot" (calls the chatgpt.com messaging API directly, no per-token cost). mode "quick" (default): returns up to max_results (default 10) items of {title, url, summary}. mode "deep": several searches, a written answer plus source URLs. NOTE: every call posts a real message into the user\'s personal Dot chat and wakes its computer — use it for genuine lookups, not bulk/looped queries (prefer codex_web_search for volume). Calls are serialized across all sessions; typically 5–30 s.',
+  inputSchema: {
+    query: z.string().min(2).describe('The search query or research question, in any language.'),
+    mode: z.enum(['quick', 'deep']).optional().describe('quick (default): result list only. deep: multi-search research with a written answer.'),
+    max_results: z.number().int().min(1).max(10).optional().describe('Max items / sources. Default 10 for quick, 5 for deep.'),
+    recency: z.string().optional().describe('e.g. "week", "month", "year" — bias toward fresh sources.'),
+    timeout_ms: z.number().int().min(30_000).max(600_000).optional(),
+  },
+}, guard('dot_web_search', dot.webSearch));
+
+// Codex 直连 API 搜索：实验性、默认关闭，同样热开关（`node server/bin/subpow.mjs codex on|off`）。
+const codexApiTool = server.registerTool('codex_api_search', {
+  title: 'Web search via Codex Responses API (experimental, switchable)',
+  description: 'Live web search by calling the ChatGPT Codex Responses endpoint directly (no codex subprocess): OpenAI\'s hosted web_search is forced, sources are structured. Much faster and lighter on quota than codex_web_search (typically 5–15 s, ~9–13K input tokens). mode "quick" (default; gpt-6-luna, low effort): up to max_results (default 10) items of {title, url, summary} plus other consulted URLs. mode "deep" (gpt-6.1-sol, medium effort): a written answer with cited sources. Uses the user\'s Codex login read-only.',
+  inputSchema: {
+    query: z.string().min(2).describe('The search query or research question, in any language.'),
+    mode: z.enum(['quick', 'deep']).optional().describe('quick (default): result list. deep: researched answer with sources.'),
+    max_results: z.number().int().min(1).max(10).optional().describe('Max items / sources. Default 10 for quick, 5 for deep.'),
+    recency: z.string().optional().describe('e.g. "week", "month", "year" — bias toward fresh sources.'),
+    model: z.string().optional().describe('Override the model, e.g. gpt-6.1-sol.'),
+    effort: z.enum(['low', 'medium', 'high', 'xhigh']).optional().describe('Override the reasoning effort.'),
+    timeout_ms: z.number().int().min(10_000).max(300_000).optional(),
+  },
+}, guard('codex_api_search', codexApi.webSearch));
+
+// 固定 ChatGPT 网页会话搜索：实验性、默认关闭（`node server/bin/subpow.mjs web session set <网址>` 再 `web on`）。
+// 经 chrome-agent-bridge 在用户指定的那个会话页面里发消息，所以 Chrome 要开着该页面。
+const chatgptWebTool = server.registerTool('chatgpt_web_search', {
+  title: 'Web search via a fixed ChatGPT web conversation (experimental, switchable)',
+  description: 'Live web search by driving ONE fixed ChatGPT web conversation the user configured (types the query into that open Chrome tab, reads the structured sources back). Sources come with title, URL, snippet and date. Needs Chrome open with that conversation visible, and uses whatever model the page has selected. mode "quick" (default): up to max_results (default 10) items of {title, url, summary, published?}. mode "deep": a researched answer plus source URLs. NOTE: every call posts a real message into that conversation; typically 8–25 s. Not for bulk use.',
+  inputSchema: {
+    query: z.string().min(2).describe('The search query or research question, in any language.'),
+    mode: z.enum(['quick', 'deep']).optional().describe('quick (default): result list. deep: researched answer with sources.'),
+    max_results: z.number().int().min(1).max(10).optional().describe('Max items / sources. Default 10 for quick, 5 for deep.'),
+    recency: z.string().optional().describe('e.g. "week", "month", "year" — bias toward fresh sources.'),
+    timeout_ms: z.number().int().min(30_000).max(600_000).optional(),
+  },
+}, guard('chatgpt_web_search', chatgptWeb.webSearch));
+
+// 统一搜索入口：按 Dot → Codex 直连 API → Codex CLI 的顺序尝试（可在配置里改顺序），失败或未开启就换下一个。
+server.registerTool('web_search', {
+  title: 'Web search (unified: tries every enabled backend in order)',
+  description: 'Use this for live web search. Tries the switched-on backends in order (default: ChatGPT Dot → Codex direct API → fixed ChatGPT web session → Codex CLI), skipping any that are off or auto-disabled and falling through on failure; the reply says which backend answered (`backend`) and what was tried (`attempts`, `skipped`). mode "quick" (default): {title, url, summary} items. mode "deep": a researched answer plus sources. Same result shape whichever backend answers.',
+  inputSchema: {
+    query: z.string().min(2).describe('The search query or research question, in any language.'),
+    mode: z.enum(['quick', 'deep']).optional().describe('quick (default): result list. deep: researched answer with sources.'),
+    max_results: z.number().int().min(1).max(10).optional().describe('Max items / sources. Default 10 for quick, 5 for deep.'),
+    recency: z.string().optional().describe('e.g. "week", "month", "year" — bias toward fresh sources.'),
+    backends: z.array(z.enum(SEARCH_BACKENDS)).optional().describe('Override the backend order for this call, e.g. ["codex_api"].'),
+    timeout_ms: z.number().int().min(10_000).max(600_000).optional(),
+  },
+}, guard('web_search', search.webSearch));
+
+// 开关热生效：监听配置文件，开关 / 熔断变化时 enable()/disable() 对应工具（SDK 自动发 tools/list_changed）
+const hot = [[dotTool, dotActive], [codexApiTool, codexApiActive], [chatgptWebTool, chatgptWebActive]];
+const syncHot = () => { for (const [tool, active] of hot) { const on = active(); if (tool.enabled !== on) on ? tool.enable() : tool.disable(); } };
+syncHot();
+fs.watchFile(CONFIG_FILE, { interval: 2000 }, syncHot);
 
 await server.connect(new StdioServerTransport());

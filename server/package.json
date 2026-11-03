@@ -9,7 +9,9 @@
   },
   "scripts": {
     "start": "node index.mjs",
-    "smoke": "node tests/smoke.mjs"
+    "smoke": "node tests/smoke.mjs",
+    "test": "node --test tests/dot.test.mjs tests/dot-capture.test.mjs tests/chatgpt-web.test.mjs tests/codex-api.test.mjs",
+    "subpow": "node bin/subpow.mjs"
   },
   "engines": {
     "node": ">=20"
